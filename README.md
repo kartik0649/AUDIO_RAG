@@ -31,6 +31,7 @@ cd frontend
 npm install
 npm start
 ```
+After running `npm start`, open `http://localhost:19006` in a browser to access the web version. Alternatively, use the Expo Go mobile app to scan the QR code displayed in the terminal.
 
 The mobile app expects the backend to run on `http://localhost:8000`.
 
