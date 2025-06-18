@@ -84,7 +84,8 @@ def get_embedder():
             thread = threading.Thread(target=create_embedder)
             thread.daemon = True
             thread.start()
-            thread.join(timeout=30)  # 30 second timeout
+            # Reduce the timeout so startup doesn't hang for long periods
+            thread.join(timeout=10)
             
             if thread.is_alive():
                 print("Embedding function creation timed out, using simple embeddings")
@@ -176,8 +177,11 @@ async def startup_event():
 
     print("Initializing ChromaDB...")
     try:
-        # Use persistent client for better reliability
-        chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
+        # Use persistent client for better reliability and disable telemetry
+        chroma_client = chromadb.PersistentClient(
+            path=CHROMA_DIR,
+            settings=Settings(anonymized_telemetry=False),
+        )
         
         # Create or get collection - always use an embedding function
         embedder = get_embedder()
@@ -333,7 +337,8 @@ async def query(audio: UploadFile = File(...)):
     retrieval_start = time.time()
     contexts = []
     if collection is not None:
-        results = collection.query(query_texts=query_text, n_results=2)
+        # Chroma expects a list of query strings
+        results = collection.query(query_texts=[query_text], n_results=2)
         documents = results.get("documents", [])
         contexts = documents[0] if documents else []
     retrieval_latency = time.time() - retrieval_start
