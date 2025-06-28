@@ -1,6 +1,11 @@
-fastapi
-uvicorn
-whisper
-chromadb
-openai
-python-multipart
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+openai-whisper==20231117
+chromadb==0.4.18
+openai==1.3.7
+python-multipart==0.0.6
+librosa==0.10.1
+soundfile==0.12.1
+pydub==0.25.1
+numpy==1.24.3
+sentence-transformers==2.2.2

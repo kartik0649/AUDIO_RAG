@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Animated } from 'react-native';
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function App() {
+  // Configure your backend URL here
+  const BACKEND_URL = 'http://192.168.1.192:8001'; // Change this to your computer's IP address
+  
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
@@ -18,7 +21,7 @@ export default function App() {
   useEffect(() => {
     const checkConnection = async () => {
       try {
-        const response = await fetch('http://localhost:8000/health', {
+        const response = await fetch(`${BACKEND_URL}/health`, {
           method: 'GET',
         });
         setIsConnected(response.ok);
@@ -30,7 +33,7 @@ export default function App() {
     checkConnection();
     const interval = setInterval(checkConnection, 10000); // Check every 10 seconds
     return () => clearInterval(interval);
-  }, []);
+  }, [BACKEND_URL]);
 
   // Pulsing animation for recording indicator
   useEffect(() => {
@@ -73,15 +76,64 @@ export default function App() {
 
   const startRecording = async () => {
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      // Request permissions with better error handling
+      const permission = await Audio.requestPermissionsAsync();
+      if (permission.status !== 'granted') {
+        Alert.alert('Permission Required', 'Microphone permission is required to record audio.');
+        return;
+      }
+
+      // Set audio mode with more compatible settings
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+        interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+
+      // Create and configure recording with simpler, more compatible options
       const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      
+      // Try with minimal configuration first
+      try {
+        await rec.prepareToRecordAsync({
+          android: {
+            extension: '.wav',
+            outputFormat: Audio.RecordingOptionsPresets.HIGH_QUALITY.android.outputFormat,
+            audioEncoder: Audio.RecordingOptionsPresets.HIGH_QUALITY.android.audioEncoder,
+            sampleRate: 16000,
+            numberOfChannels: 1,
+            bitRate: 128000,
+          },
+          ios: {
+            extension: '.wav',
+            outputFormat: Audio.RecordingOptionsPresets.HIGH_QUALITY.ios.outputFormat,
+            audioQuality: Audio.RecordingOptionsPresets.HIGH_QUALITY.ios.audioQuality,
+            sampleRate: 16000,
+            numberOfChannels: 1,
+            bitRate: 128000,
+          },
+          web: {
+            mimeType: 'audio/wav',
+            bitsPerSecond: 128000,
+          },
+        });
+      } catch (prepareError: any) {
+        console.log('First prepare attempt failed, trying with default settings:', prepareError);
+        // Fallback to default settings
+        await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      }
+
       await rec.startAsync();
       setRecording(rec);
-    } catch (err) {
+      console.log('Recording started successfully');
+    } catch (err: any) {
       console.error('Failed to start recording', err);
-      Alert.alert('Error', 'Failed to start recording. Please check permissions.');
+      const errorMessage = err?.message || err?.toString() || 'Unknown error occurred';
+      Alert.alert('Recording Error', `Failed to start recording: ${errorMessage}`);
     }
   };
 
@@ -96,29 +148,41 @@ export default function App() {
       
       if (!uri) {
         setIsLoading(false);
+        Alert.alert('Error', 'No recording URI available');
         return;
       }
 
+      console.log('Recording stopped, processing audio...');
       const data = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
       const start = Date.now();
       
-      const res = await fetch('http://localhost:8000/query', {
+      // Convert base64 to binary data for React Native
+      const binaryString = atob(data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      console.log(`Sending ${bytes.length} bytes to backend...`);
+      const res = await fetch(`${BACKEND_URL}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: Buffer.from(data, 'base64'),
+        body: bytes,
       });
       
       if (!res.ok) {
-        throw new Error('Network response was not ok');
+        throw new Error(`Network response was not ok: ${res.status}`);
       }
       
       const json = await res.json();
       setLatency(Date.now() - start);
       setTranscript(json.transcript);
       setResponse(json.response);
-    } catch (err) {
+      console.log('Audio processed successfully');
+    } catch (err: any) {
       console.error('Failed to process audio', err);
-      Alert.alert('Error', 'Failed to process audio. Please try again.');
+      const errorMessage = err?.message || err?.toString() || 'Unknown error occurred';
+      Alert.alert('Processing Error', `Failed to process audio: ${errorMessage}`);
     } finally {
       setIsLoading(false);
     }
@@ -215,7 +279,7 @@ export default function App() {
             <Text style={styles.emptyStateSubtitle}>
               {isConnected 
                 ? 'Tap the microphone button below to start a voice conversation'
-                : 'Please start the backend server on localhost:8000 to use the voice agent'
+                : `Please start the backend server on ${BACKEND_URL.replace('http://', '')} to use the voice agent`
               }
             </Text>
           </View>
@@ -242,7 +306,7 @@ export default function App() {
             ]}
             onPress={() => {
               if (!isConnected) {
-                Alert.alert('Connection Error', 'Please make sure the backend server is running on localhost:8000');
+                Alert.alert('Connection Error', `Please make sure the backend server is running on ${BACKEND_URL.replace('http://', '')}`);
                 return;
               }
               animatePress();
