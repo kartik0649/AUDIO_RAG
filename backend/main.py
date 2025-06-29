@@ -19,7 +19,8 @@ from fastapi import FastAPI, Request, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import whisper
-import openai
+from xai_sdk import Client
+from xai_sdk.chat import user, system
 from audio_processor import process_audio_for_whisper, AudioProcessor
 from faiss_vector_store import FAISSVectorStore
 from text_chunker import create_chunker
@@ -37,11 +38,12 @@ except ImportError:
     whisper = None
 
 try:
-    import openai
-    from openai import OpenAI
+    from xai_sdk import Client
+    from xai_sdk.chat import user, system
 except ImportError:
-    openai = None
-    OpenAI = None
+    Client = None
+    user = None
+    system = None
 
 app = FastAPI()
 app.add_middleware(
@@ -57,7 +59,7 @@ KB_DIR = os.path.join(os.path.dirname(__file__), "data", "sample_kb")
 # Global variables for caching
 vector_store = None
 whisper_model = None
-openai_client = None
+xai_client = None
 startup_complete = False
 chunker = None
 
@@ -125,11 +127,20 @@ def split_large_document(content, max_chunk_size=50000):
     
     return chunks
 
-# Load OpenAI API key and initialize client
-api_key = os.getenv("OPENAI_API_KEY")
-if openai is not None and OpenAI is not None and api_key:
-    openai.api_key = api_key
-    openai_client = OpenAI(api_key=api_key)
+# Load xAI API key and initialize client
+api_key = os.getenv("GROK_API_KEY")
+if Client is not None and api_key:
+    try:
+        xai_client = Client(
+            api_host="api.x.ai",
+            api_key=api_key
+        )
+        print("✅ xAI client initialized successfully")
+    except Exception as e:
+        print(f"Error initializing xAI client: {e}")
+        xai_client = None
+else:
+    print("Warning: xAI SDK not installed or API key not provided")
 
 @app.on_event("startup")
 async def startup_event():
@@ -511,16 +522,24 @@ async def query(request: Request, audio: UploadFile = File(None)):
         response_text = ""
         retrieved_documents = []
         
-        if openai_client is not None:
-            prompt = f"Answer the question based on context: {contexts}\nQuestion: {query_text}"
+        if xai_client is not None and system is not None and user is not None:
             try:
-                completion = openai_client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                response_text = completion.choices[0].message.content
+                # Create a new chat session with Grok
+                chat = xai_client.chat.create(model="grok-3-mini-fast", temperature=0)
+                
+                # Add system message for context
+                system_prompt = f"You are a helpful AI assistant. Answer the question based on the provided context. Only give the response and directly answer the questions Context, keep the answer short: {str(contexts)}"
+                chat.append(system(system_prompt))
+                
+                # Add user question
+                chat.append(user(str(query_text)))
+                
+                # Get the response using chat.sample()
+                response = chat.sample()
+                response_text = response.content  # This is a string, safe for JSON
+                
             except Exception as e:
-                print(f"OpenAI API error: {e}")
+                print(f"xAI API error: {e}")
                 response_text = f"Error: {e}"
         else:
             response_text = "LLM backend not configured"
@@ -567,12 +586,12 @@ async def health_check():
         "startup_complete": startup_complete,
         "whisper_loaded": whisper_model is not None,
         "faiss_loaded": vector_store is not None,
-        "openai_configured": openai_client is not None,
+        "xai_configured": xai_client is not None,
         "chunker_configured": chunker is not None,
         "chunking_config": {
             "chunk_size": CHUNK_SIZE,
             "chunk_overlap": CHUNK_OVERLAP,
-            "model_name": "gpt-3.5-turbo"
+            "model_name": "grok-3-mini-fast"
         } if chunker else None,
         "vector_store_info": vector_store.get_info() if vector_store else None
     }
