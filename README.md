@@ -43,6 +43,11 @@ startup. Modify or add documents there to experiment with retrieval.
 
 ### Prototype-1 (Current Implementation)
 
+![WhatsApp Image 2025-06-28 at 20 39 23_8ed89393](https://github.com/user-attachments/assets/04608a14-9488-4ba2-989b-f96c80c0a73f)
+![WhatsApp Image 2025-06-28 at 20 39 23_dc750133](https://github.com/user-attachments/assets/14f81a1e-400c-41ca-bdef-7d1ea3841eb8)
+
+
+
 **Architecture:**
 - **Frontend**: React Native mobile app with audio recording
 - **Backend**: FastAPI server with audio processing and RAG pipeline
