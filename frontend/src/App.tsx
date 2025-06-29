@@ -12,6 +12,20 @@ export default function App() {
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
   const [latency, setLatency] = useState(0);
+  const [latencyStats, setLatencyStats] = useState<{
+    audio_processing_latency: number;
+    retrieval_latency: number;
+    llm_latency: number;
+    total_latency: number;
+  } | null>(null);
+  const [retrievedDocuments, setRetrievedDocuments] = useState<Array<{
+    source: string;
+    original_file: string;
+    similarity_score: number;
+    chunk_index?: number;
+    total_chunks?: number;
+    token_count?: number;
+  }>>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [pulseAnim] = useState(new Animated.Value(1));
   const [buttonScale] = useState(new Animated.Value(1));
@@ -176,6 +190,26 @@ export default function App() {
       
       const json = await res.json();
       setLatency(Date.now() - start);
+      
+      // Extract detailed latency stats from backend response
+      if (json.audio_processing_latency !== undefined && json.retrieval_latency !== undefined && json.llm_latency !== undefined && json.total_latency !== undefined) {
+        setLatencyStats({
+          audio_processing_latency: json.audio_processing_latency,
+          retrieval_latency: json.retrieval_latency,
+          llm_latency: json.llm_latency,
+          total_latency: json.total_latency,
+        });
+      } else {
+        setLatencyStats(null);
+      }
+      
+      // Extract retrieved documents
+      if (json.retrieved_documents && Array.isArray(json.retrieved_documents)) {
+        setRetrievedDocuments(json.retrieved_documents);
+      } else {
+        setRetrievedDocuments([]);
+      }
+      
       setTranscript(json.transcript);
       setResponse(json.response);
       console.log('Audio processed successfully');
@@ -192,6 +226,8 @@ export default function App() {
     setTranscript('');
     setResponse('');
     setLatency(0);
+    setLatencyStats(null);
+    setRetrievedDocuments([]);
   };
 
   return (
@@ -256,7 +292,147 @@ export default function App() {
               </View>
             )}
             
-            {latency > 0 && (
+            {/* Retrieved Documents */}
+            {retrievedDocuments.length > 0 && (
+              <View style={styles.retrievedDocsContainer}>
+                <View style={styles.retrievedDocsHeader}>
+                  <Ionicons name="document-text" size={16} color="#6b7280" />
+                  <Text style={styles.retrievedDocsTitle}>Knowledge Sources</Text>
+                </View>
+                
+                {retrievedDocuments.map((doc, index) => (
+                  <View key={index} style={styles.docItem}>
+                    <View style={styles.docInfo}>
+                      <Text style={styles.docSource}>
+                        {doc.source.replace('_chunk_', ' (Chunk ').replace(/(\d+)$/, '$1)')}
+                        {doc.chunk_index && doc.total_chunks && (
+                          <Text style={styles.chunkInfo}>
+                            {' '}(Chunk {doc.chunk_index}/{doc.total_chunks})
+                          </Text>
+                        )}
+                      </Text>
+                      <Text style={styles.docOriginal}>
+                        From: {doc.original_file.replace('_chunk_', ' (Chunk ').replace(/(\d+)$/, '$1)')}
+                      </Text>
+                      {doc.token_count && (
+                        <Text style={styles.tokenInfo}>
+                          Tokens: {doc.token_count}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.docScore}>
+                      <Text style={styles.scoreLabel}>Relevance</Text>
+                      <Text style={styles.scoreValue}>
+                        {(doc.similarity_score * 100).toFixed(1)}%
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+            
+            {/* Detailed Latency Statistics */}
+            {latencyStats && (
+              <View style={styles.latencyStatsContainer}>
+                <View style={styles.latencyStatsHeader}>
+                  <Ionicons name="analytics" size={16} color="#6b7280" />
+                  <Text style={styles.latencyStatsTitle}>Performance Metrics</Text>
+                </View>
+                
+                <View style={styles.latencyStatsGrid}>
+                  <View style={styles.latencyStatItem}>
+                    <Text style={styles.latencyStatLabel}>Audio Processing</Text>
+                    <Text style={styles.latencyStatValue}>
+                      {(latencyStats.audio_processing_latency * 1000).toFixed(0)}ms
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.latencyStatItem}>
+                    <Text style={styles.latencyStatLabel}>Vector Search</Text>
+                    <Text style={styles.latencyStatValue}>
+                      {(latencyStats.retrieval_latency * 1000).toFixed(0)}ms
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.latencyStatItem}>
+                    <Text style={styles.latencyStatLabel}>LLM Response</Text>
+                    <Text style={styles.latencyStatValue}>
+                      {(latencyStats.llm_latency * 1000).toFixed(0)}ms
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.latencyStatItem}>
+                    <Text style={styles.latencyStatLabel}>Total Backend</Text>
+                    <Text style={styles.latencyStatValue}>
+                      {(latencyStats.total_latency * 1000).toFixed(0)}ms
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.latencyStatItem}>
+                    <Text style={styles.latencyStatLabel}>Network + UI</Text>
+                    <Text style={styles.latencyStatValue}>
+                      {Math.max(0, latency - (latencyStats.total_latency * 1000)).toFixed(0)}ms
+                    </Text>
+                  </View>
+                  
+                  <View style={styles.latencyStatItem}>
+                    <Text style={styles.latencyStatLabel}>Total End-to-End</Text>
+                    <Text style={styles.latencyStatValue}>
+                      {latency}ms
+                    </Text>
+                  </View>
+                </View>
+                
+                <View style={styles.latencyBreakdown}>
+                  <View style={styles.breakdownBar}>
+                    <View 
+                      style={[
+                        styles.breakdownSegment, 
+                        { 
+                          backgroundColor: '#8b5cf6',
+                          width: `${(latencyStats.audio_processing_latency / latencyStats.total_latency) * 100}%`
+                        }
+                      ]} 
+                    />
+                    <View 
+                      style={[
+                        styles.breakdownSegment, 
+                        { 
+                          backgroundColor: '#3b82f6',
+                          width: `${(latencyStats.retrieval_latency / latencyStats.total_latency) * 100}%`
+                        }
+                      ]} 
+                    />
+                    <View 
+                      style={[
+                        styles.breakdownSegment, 
+                        { 
+                          backgroundColor: '#10b981',
+                          width: `${(latencyStats.llm_latency / latencyStats.total_latency) * 100}%`
+                        }
+                      ]} 
+                    />
+                  </View>
+                  <View style={styles.breakdownLegend}>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#8b5cf6' }]} />
+                      <Text style={styles.legendText}>Audio</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#3b82f6' }]} />
+                      <Text style={styles.legendText}>Vector Search</Text>
+                    </View>
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: '#10b981' }]} />
+                      <Text style={styles.legendText}>LLM Response</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            )}
+            
+            {/* Fallback simple latency display */}
+            {!latencyStats && latency > 0 && (
               <View style={styles.latencyContainer}>
                 <Ionicons name="time" size={16} color="#6b7280" />
                 <Text style={styles.latencyText}>Response time: {latency}ms</Text>
@@ -540,5 +716,159 @@ const styles = StyleSheet.create({
   statusText: {
     fontSize: 16,
     fontWeight: '600',
+  },
+  latencyStatsContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  latencyStatsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  latencyStatsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginLeft: 6,
+  },
+  latencyStatsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  latencyStatItem: {
+    width: '48%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    padding: 8,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  latencyStatLabel: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  latencyStatValue: {
+    color: '#1f2937',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  latencyBreakdown: {
+    marginTop: 8,
+  },
+  breakdownBar: {
+    flexDirection: 'row',
+    height: 8,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  breakdownSegment: {
+    height: '100%',
+  },
+  breakdownLegend: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 8,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  legendText: {
+    color: '#6b7280',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  retrievedDocsContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  retrievedDocsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  retrievedDocsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginLeft: 6,
+  },
+  docItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  docInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  docSource: {
+    color: '#1f2937',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  docOriginal: {
+    color: '#6b7280',
+    fontSize: 12,
+  },
+  docScore: {
+    alignItems: 'flex-end',
+  },
+  scoreLabel: {
+    color: '#6b7280',
+    fontSize: 10,
+    fontWeight: '500',
+    marginBottom: 2,
+  },
+  scoreValue: {
+    color: '#10b981',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  chunkInfo: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  tokenInfo: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '500',
   },
 });
