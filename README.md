@@ -73,6 +73,14 @@ startup. Modify or add documents there to experiment with retrieval.
 - `CHUNK_SIZE`: Token count per chunk (default: 512)
 - `CHUNK_OVERLAP`: Overlapping tokens between chunks (default: 50)
 
+**Screenshots:**
+
+![GPT Screenshot 1](frontend/screenshots/ss-gpt-1.jpg)
+*GPT-3.5-turbo response example*
+
+![GPT Screenshot 2](frontend/screenshots/ss-gpt-2.jpg)
+*GPT-3.5-turbo interface demonstration*
+
 ### Prototype-2
 
 *Prototype-2 uses Grok instead of GPT-3.5-turbo for response generation.*
@@ -80,6 +88,17 @@ startup. Modify or add documents there to experiment with retrieval.
 **Key Differences from Prototype-1:**
 - **Language Model**: Grok (instead of OpenAI GPT-3.5-turbo)
 - **Other components remain the same**: FAISS vector store, Whisper transcription, React Native frontend
+
+**Screenshots:**
+
+![Grok Screenshot 1](frontend/screenshots/ss-grok-1.jpg)
+*Grok response example*
+
+![Grok Screenshot 2](frontend/screenshots/ss-grok-2.jpg)
+*Grok interface demonstration*
+
+![Grok Screenshot 3](frontend/screenshots/ss-grok-3.jpg)
+*Grok additional functionality*
 
 ## Report
 
