@@ -79,11 +79,17 @@ startup. Modify or add documents there to experiment with retrieval.
 
 **Screenshots:**
 
-![GPT Screenshot 1](frontend/screenshots/ss-gpt-1.jpg)
-*GPT-3.5-turbo response example*
+<table>
+  <tr>
+    <td><img src="frontend/screenshots/ss-gpt-1.jpg" alt="GPT Screenshot 1" width="200"/></td>
+    <td><img src="frontend/screenshots/ss-gpt-2.jpg" alt="GPT Screenshot 2" width="200"/></td>
+  </tr>
+  <tr>
+    <td><em>GPT-3.5-turbo response example</em></td>
+    <td><em>GPT-3.5-turbo interface demonstration</em></td>
+  </tr>
+</table>
 
-![GPT Screenshot 2](frontend/screenshots/ss-gpt-2.jpg)
-*GPT-3.5-turbo interface demonstration*
 
 ### Prototype-2
 
@@ -94,15 +100,19 @@ startup. Modify or add documents there to experiment with retrieval.
 - **Other components remain the same**: FAISS vector store, Whisper transcription, React Native frontend
 
 **Screenshots:**
+<table>
+  <tr>
+    <td><img src="frontend/screenshots/ss-grok-1.jpg" alt="Grok Screenshot 1" width="200"/></td>
+    <td><img src="frontend/screenshots/ss-grok-2.jpg" alt="Grok Screenshot 2" width="200"/></td>
+    <td><img src="frontend/screenshots/ss-grok-3.jpg" alt="Grok Screenshot 3" width="200"/></td>
+  </tr>
+  <tr>
+    <td><em>Grok response example</em></td>
+    <td><em>Grok interface demonstration</em></td>
+    <td><em>Grok additional functionality</em></td>
+  </tr>
+</table>
 
-![Grok Screenshot 1](frontend/screenshots/ss-grok-1.jpg)
-*Grok response example*
-
-![Grok Screenshot 2](frontend/screenshots/ss-grok-2.jpg)
-*Grok interface demonstration*
-
-![Grok Screenshot 3](frontend/screenshots/ss-grok-3.jpg)
-*Grok additional functionality*
 
 ## Report
 
