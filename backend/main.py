@@ -1,11 +1,11 @@
 import os
 # 1) tell ChromaDB at import time to disable *all* telemetry
-# os.environ["CHROMA_TELEMETRY"] = "false"  # No longer needed with FAISS
+# os.environ["CHROMA_TELEMETRY"] = "false"  # No longer needed with Qdrant
 
 # 2) optionally bump the PostHog logger so you never see it even if it starts up
 import logging
 # logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.WARNING)  # No longer needed
-logging.getLogger("faiss").setLevel(logging.INFO)
+logging.getLogger("qdrant_client").setLevel(logging.INFO)
 
 # Ensure ffmpeg/ffprobe are in PATH for all subprocesses (including Whisper)
 os.environ["PATH"] = r"C:\ffmpeg\bin;" + os.environ["PATH"]
@@ -22,7 +22,7 @@ import whisper
 from xai_sdk import Client
 from xai_sdk.chat import user, system
 from audio_processor import process_audio_for_whisper, AudioProcessor
-from faiss_vector_store import FAISSVectorStore
+from qdrant_vector_store import QdrantVectorStore
 from text_chunker import create_chunker
 
 import uuid
@@ -65,7 +65,7 @@ chunker = None
 
 # Configuration
 SKIP_INGESTION = os.getenv("SKIP_INGESTION", "false").lower() == "true"
-VECTOR_STORE_PATH = os.path.join(os.path.dirname(__file__), "faiss_knowledge_base")
+VECTOR_STORE_PATH = os.path.join(os.path.dirname(__file__), "qdrant_storage")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 
@@ -145,7 +145,7 @@ else:
 @app.on_event("startup")
 async def startup_event():
     global vector_store, whisper_model, startup_complete, chunker
-    print("Starting up Audio RAG system with FAISS...")
+    print("Starting up Audio RAG system with Qdrant...")
     
     # Initialize token-based chunker
     print(f"Initializing token-based chunker (chunk_size={CHUNK_SIZE}, overlap={CHUNK_OVERLAP})...")
@@ -167,21 +167,18 @@ async def startup_event():
     else:
         print("Warning: whisper not installed")
     
-    print("Initializing FAISS vector store...")
+    print("Initializing Qdrant vector store...")
     try:
-        # Try to load existing vector store
-        if os.path.exists(f"{VECTOR_STORE_PATH}.index"):
-            print("Loading existing FAISS vector store...")
-            vector_store = FAISSVectorStore()
-            vector_store.load(VECTOR_STORE_PATH)
-            print(f"✅ Loaded existing vector store with {vector_store.count()} documents")
-        else:
-            print("Creating new FAISS vector store...")
-            vector_store = FAISSVectorStore()
-            print("✅ New vector store initialized")
+        # Initialize Qdrant vector store with persistent storage
+        print("Creating Qdrant vector store with persistent storage...")
+        vector_store = QdrantVectorStore(
+            storage_path=VECTOR_STORE_PATH,
+            use_persistent_storage=True
+        )
+        print(f"✅ Qdrant vector store initialized with {vector_store.count()} documents")
             
     except Exception as e:
-        print(f"Error initializing FAISS vector store: {e}")
+        print(f"Error initializing Qdrant vector store: {e}")
         import traceback
         traceback.print_exc()
         vector_store = None
@@ -202,7 +199,7 @@ async def startup_event():
 
 def ingest_kb():
     if vector_store is None:
-        print("FAISS vector store not available, skipping ingestion")
+        print("Qdrant vector store not available, skipping ingestion")
         return
     
     if chunker is None:
@@ -264,7 +261,7 @@ def ingest_kb():
                 print(f"Starting embedding for batch {i//BATCH_SIZE + 1}...")
                 start_time = time.time()
                 
-                # Add documents to FAISS vector store
+                # Add documents to Qdrant vector store
                 vector_store.add_documents(docs, metadatas, ids)
                 
                 end_time = time.time()
@@ -464,11 +461,11 @@ async def query(request: Request, audio: UploadFile = File(None)):
         contexts = []
         search_results = None
         
-        # Use FAISS vector store for retrieval
+        # Use Qdrant vector store for retrieval
         if vector_store is not None:
             try:
                 # Try to get relevant contexts from the knowledge base
-                print(f"Querying FAISS vector store with text: {query_text}")
+                print(f"Querying Qdrant vector store with text: {query_text}")
                 print(f"Vector store info: {vector_store.get_info()}")
                 
                 print("About to call vector_store.count()...")
@@ -489,7 +486,7 @@ async def query(request: Request, audio: UploadFile = File(None)):
                     }
                 
                 # Search for similar documents
-                print("Searching FAISS vector store...")
+                print("Searching Qdrant vector store...")
                 try:
                     # Ensure query_text is a string
                     if isinstance(query_text, list):
@@ -498,14 +495,14 @@ async def query(request: Request, audio: UploadFile = File(None)):
                         query_text = str(query_text)
                     
                     search_results = vector_store.search(query_text, n_results=3)
-                    print(f"FAISS search results: {search_results}")
+                    print(f"Qdrant search results: {search_results}")
                     if search_results and search_results['documents']:
                         contexts = search_results['documents']
                     else:
                         contexts = ["Sample context for testing"]
                         
                 except Exception as e:
-                    print(f"FAISS search error: {e}")
+                    print(f"Qdrant search error: {e}")
                     contexts = ["Sample context for testing"]
                         
             except Exception as e:
@@ -514,7 +511,7 @@ async def query(request: Request, audio: UploadFile = File(None)):
                 traceback.print_exc()
                 contexts = ["Sample context for testing"]
         else:
-            print("FAISS vector store is None, using sample context")
+            print("Qdrant vector store is None, using sample context")
             contexts = ["Sample context for testing"]
         
         retrieval_latency = time.time() - retrieval_start
@@ -585,7 +582,7 @@ async def health_check():
         "status": "healthy" if startup_complete else "starting up",
         "startup_complete": startup_complete,
         "whisper_loaded": whisper_model is not None,
-        "faiss_loaded": vector_store is not None,
+        "qdrant_loaded": vector_store is not None,
         "xai_configured": xai_client is not None,
         "chunker_configured": chunker is not None,
         "chunking_config": {
