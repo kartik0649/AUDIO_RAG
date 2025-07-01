@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Animated } from 'react-native';
 import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
+import EventSource from 'react-native-sse';
 
 export default function App() {
   // Configure your backend URL here
@@ -18,6 +19,7 @@ export default function App() {
     llm_latency: number;
     total_latency: number;
   } | null>(null);
+  const [startTime, setStartTime] = useState<number | null>(null);
   const [retrievedDocuments, setRetrievedDocuments] = useState<Array<{
     source: string;
     original_file: string;
@@ -30,6 +32,11 @@ export default function App() {
   const [pulseAnim] = useState(new Animated.Value(1));
   const [buttonScale] = useState(new Animated.Value(1));
   const [isConnected, setIsConnected] = useState(false);
+  const [streamingResponse, setStreamingResponse] = useState('');
+  const [streamingTranscript, setStreamingTranscript] = useState('');
+  const [streamingStatus, setStreamingStatus] = useState('');
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   // Check connection status
   useEffect(() => {
@@ -90,137 +97,252 @@ export default function App() {
 
   const startRecording = async () => {
     try {
-      // Request permissions with better error handling
+      console.log('Requesting permissions...');
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== 'granted') {
-        Alert.alert('Permission Required', 'Microphone permission is required to record audio.');
+        Alert.alert('Permission required', 'Please grant microphone permission to record audio.');
         return;
       }
 
-      // Set audio mode with more compatible settings
+      console.log('Setting audio mode...');
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        interruptionModeIOS: InterruptionModeIOS.DoNotMix,
-        interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
       });
 
-      // Create and configure recording with simpler, more compatible options
-      const rec = new Audio.Recording();
-      
-      // Try with minimal configuration first
-      try {
-        await rec.prepareToRecordAsync({
-          android: {
-            extension: '.wav',
-            outputFormat: Audio.RecordingOptionsPresets.HIGH_QUALITY.android.outputFormat,
-            audioEncoder: Audio.RecordingOptionsPresets.HIGH_QUALITY.android.audioEncoder,
-            sampleRate: 16000,
-            numberOfChannels: 1,
-            bitRate: 128000,
-          },
-          ios: {
-            extension: '.wav',
-            outputFormat: Audio.RecordingOptionsPresets.HIGH_QUALITY.ios.outputFormat,
-            audioQuality: Audio.RecordingOptionsPresets.HIGH_QUALITY.ios.audioQuality,
-            sampleRate: 16000,
-            numberOfChannels: 1,
-            bitRate: 128000,
-          },
-          web: {
-            mimeType: 'audio/wav',
-            bitsPerSecond: 128000,
-          },
-        });
-      } catch (prepareError: any) {
-        console.log('First prepare attempt failed, trying with default settings:', prepareError);
-        // Fallback to default settings
-        await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      }
-
-      await rec.startAsync();
-      setRecording(rec);
-      console.log('Recording started successfully');
-    } catch (err: any) {
+      console.log('Starting recording...');
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      recordingRef.current = recording;
+      setRecording(recording);
+      setStartTime(Date.now()); // Start timing
+      console.log('Recording started');
+    } catch (err) {
       console.error('Failed to start recording', err);
-      const errorMessage = err?.message || err?.toString() || 'Unknown error occurred';
-      Alert.alert('Recording Error', `Failed to start recording: ${errorMessage}`);
+      Alert.alert('Recording Error', 'Failed to start recording');
     }
   };
 
   const stopRecording = async () => {
-    if (!recording) return;
-    
-    setIsLoading(true);
-    try {
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecording(null);
-      
-      if (!uri) {
-        setIsLoading(false);
-        Alert.alert('Error', 'No recording URI available');
-        return;
-      }
+    console.log('stopRecording called, recordingRef.current:', recordingRef.current);
+    if (!recordingRef.current) {
+      console.log('No recording ref, returning');
+      return;
+    }
 
-      console.log('Recording stopped, processing audio...');
-      const data = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-      const start = Date.now();
+    try {
+      console.log('Stopping recording...');
+      await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      console.log('Recording stopped, URI:', uri);
       
-      // Convert base64 to binary data for React Native
-      const binaryString = atob(data);
+      setRecording(null);
+      recordingRef.current = null;
+      setIsLoading(true);
+      setStreamingResponse('');
+      setStreamingTranscript('');
+      setStreamingStatus('');
+
+      if (uri) {
+        await processAudio(uri);
+      } else {
+        console.log('No URI returned from recording');
+        setIsLoading(false);
+      }
+    } catch (err) {
+      console.error('Failed to stop recording', err);
+      Alert.alert('Recording Error', 'Failed to stop recording');
+      setIsLoading(false);
+    }
+  };
+
+  const processAudio = async (audioUri: string) => {
+    setIsLoading(true);
+    setResponse('');
+    setTranscript('');
+    setLatency(0);
+    setLatencyStats(null);
+    setRetrievedDocuments([]);
+    setStreamingResponse('');
+    setStreamingTranscript('');
+    setStreamingStatus('');
+
+    try {
+      console.log('Reading audio file...');
+      
+      // For React Native, we need to read the file as base64 first
+      const base64Data = await FileSystem.readAsStringAsync(audioUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      console.log('Audio file read, size:', base64Data.length);
+      
+      // Convert base64 to binary string
+      const binaryString = atob(base64Data);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
       
-      console.log(`Sending ${bytes.length} bytes to backend...`);
-      const res = await fetch(`${BACKEND_URL}/query`, {
+      console.log('Audio bytes created, size:', bytes.length);
+
+      console.log('Sending audio to hybrid endpoint...');
+      
+      // Send the audio data directly as raw bytes
+      const hybridResponse = await fetch(`${BACKEND_URL}/query/hybrid`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: {
+          'Content-Type': 'audio/m4a',
+        },
         body: bytes,
       });
-      
-      if (!res.ok) {
-        throw new Error(`Network response was not ok: ${res.status}`);
+
+      if (!hybridResponse.ok) {
+        const errorText = await hybridResponse.text();
+        console.error('Hybrid endpoint error:', hybridResponse.status, errorText);
+        throw new Error(`Hybrid endpoint failed: ${hybridResponse.status} - ${errorText}`);
       }
+
+      const { session_id } = await hybridResponse.json();
+      console.log('Session ID received:', session_id);
+
+      // Step 2: Connect to SSE for streaming
+      console.log('Connecting to SSE stream...');
       
-      const json = await res.json();
-      setLatency(Date.now() - start);
-      
-      // Extract detailed latency stats from backend response
-      if (json.audio_processing_latency !== undefined && json.retrieval_latency !== undefined && json.llm_latency !== undefined && json.total_latency !== undefined) {
-        setLatencyStats({
-          audio_processing_latency: json.audio_processing_latency,
-          retrieval_latency: json.retrieval_latency,
-          llm_latency: json.llm_latency,
-          total_latency: json.total_latency,
-        });
-      } else {
-        setLatencyStats(null);
+      // Close any existing EventSource
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
       }
-      
-      // Extract retrieved documents
-      if (json.retrieved_documents && Array.isArray(json.retrieved_documents)) {
-        setRetrievedDocuments(json.retrieved_documents);
-      } else {
-        setRetrievedDocuments([]);
-      }
-      
-      setTranscript(json.transcript);
-      setResponse(json.response);
-      console.log('Audio processed successfully');
-    } catch (err: any) {
-      console.error('Failed to process audio', err);
-      const errorMessage = err?.message || err?.toString() || 'Unknown error occurred';
-      Alert.alert('Processing Error', `Failed to process audio: ${errorMessage}`);
-    } finally {
+
+      // Create new EventSource for real-time streaming
+      const eventSource = new EventSource(`${BACKEND_URL}/stream/${session_id}`);
+      eventSourceRef.current = eventSource;
+
+      let fullResponse = '';
+      let fullTranscript = '';
+      let isComplete = false;
+      let responseComplete = false;
+
+      eventSource.addEventListener('open', (event) => {
+        console.log('SSE connection opened');
+      });
+
+      eventSource.addEventListener('message', (event) => {
+        try {
+          if (!event.data) {
+            console.log('Empty SSE message received');
+            return;
+          }
+          const data = JSON.parse(event.data);
+          console.log('SSE message received:', data);
+
+          switch (data.type) {
+            case 'status':
+              console.log('Status:', data.message);
+              setStreamingStatus(data.message);
+              break;
+
+            case 'transcript':
+              fullTranscript = data.text;
+              setStreamingTranscript(data.text);
+              setTranscript(data.text);
+              console.log('🟢 Transcript received and set:', data.text);
+              console.log('🟢 Current transcript state:', fullTranscript);
+              break;
+
+            case 'chunk':
+              fullResponse += data.content;
+              setStreamingResponse(fullResponse);
+              setResponse(fullResponse);
+              console.log('Chunk received:', data.content);
+              break;
+
+            case 'complete':
+              isComplete = true;
+              responseComplete = true;
+              fullResponse = data.full_response;
+              setResponse(fullResponse);
+              setTranscript(fullTranscript);
+              setLatencyStats({
+                audio_processing_latency: data.audio_processing_latency || 0,
+                retrieval_latency: data.retrieval_latency || 0,
+                llm_latency: data.llm_latency || 0,
+                total_latency: data.total_latency || 0
+              });
+              console.log('🟢 Response complete:', data);
+              console.log('🟢 Retrieved documents:', data.retrieved_documents);
+              
+              // Calculate end-to-end latency from start to finish
+              const endTime = Date.now();
+              const endToEndLatency = startTime ? endTime - startTime : 0;
+              setLatency(endToEndLatency);
+              
+              // Use backend latency stats for breakdown
+              const totalBackendLatency = data.total_latency || 0;
+              
+              console.log('🟢 Latency calculations:');
+              console.log('  - Start time:', startTime);
+              console.log('  - End time:', endTime);
+              console.log('  - End-to-end latency:', endToEndLatency, 'ms');
+              console.log('  - Backend total latency:', totalBackendLatency * 1000, 'ms');
+              console.log('  - Network + UI latency:', Math.max(0, endToEndLatency - (totalBackendLatency * 1000)), 'ms');
+              
+              // Add retrieved documents from backend
+              if (data.retrieved_documents && Array.isArray(data.retrieved_documents)) {
+                console.log('🟢 Setting retrieved documents:', data.retrieved_documents);
+                setRetrievedDocuments(data.retrieved_documents);
+              } else {
+                console.log('🟡 No retrieved documents in response');
+              }
+              
+              // Clean up
+              eventSource.close();
+              eventSourceRef.current = null;
+              setIsLoading(false);
+              setStreamingResponse('');
+              setStreamingTranscript('');
+              setStreamingStatus('Complete');
+              break;
+
+            case 'error':
+              console.error('SSE error:', data.message);
+              // Only show error if response is not complete
+              if (!responseComplete) {
+                Alert.alert('Streaming Error', data.message);
+              }
+              eventSource.close();
+              eventSourceRef.current = null;
+              setIsLoading(false);
+              break;
+
+            default:
+              console.log('Unknown message type:', data.type);
+          }
+        } catch (error) {
+          console.error('Error parsing SSE message:', error);
+        }
+      });
+
+      eventSource.addEventListener('error', (error) => {
+        console.error('EventSource error:', error);
+        if (!isComplete && !responseComplete) {
+          Alert.alert('Streaming Error', 'Connection lost. Please try again.');
+          eventSource.close();
+          eventSourceRef.current = null;
+          setIsLoading(false);
+        }
+      });
+
+    } catch (error) {
+      console.error('Processing error:', error);
       setIsLoading(false);
+      Alert.alert('Processing Error', `Failed to process audio: ${(error as any)?.message || (error as any)?.toString() || 'Unknown error occurred'}`);
     }
   };
+
+  const formatLatency = (latency: number) => `${Math.round(latency)}ms`;
+  const formatBackendLatency = (latency: number) => `${Math.round(latency * 1000)}ms`;
 
   const clearChat = () => {
     setTranscript('');
@@ -228,6 +350,10 @@ export default function App() {
     setLatency(0);
     setLatencyStats(null);
     setRetrievedDocuments([]);
+    setStreamingResponse('');
+    setStreamingTranscript('');
+    setStreamingStatus('');
+    setStartTime(null);
   };
 
   return (
@@ -266,28 +392,29 @@ export default function App() {
           {isLoading && (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#6366f1" />
-              <Text style={styles.loadingText}>Processing your voice...</Text>
+              <Text style={styles.loadingText}>
+                {streamingStatus || 'Processing your voice...'}
+              </Text>
             </View>
           )}
         </View>
 
         {/* Chat Messages */}
-        {(transcript || response) && (
+        {(streamingTranscript || transcript || streamingResponse || response) && (
           <View style={styles.chatContainer}>
-            {transcript && (
+            {(streamingTranscript || transcript) && (
               <View style={styles.messageContainer}>
                 <View style={styles.userMessage}>
                   <Ionicons name="person" size={20} color="#6366f1" style={styles.messageIcon} />
-                  <Text style={styles.userMessageText}>{transcript}</Text>
+                  <Text style={styles.userMessageText}>{streamingTranscript || transcript}</Text>
                 </View>
               </View>
             )}
-            
-            {response && (
+            {(streamingResponse || response) && (
               <View style={styles.messageContainer}>
                 <View style={styles.assistantMessage}>
                   <Ionicons name="chatbubble" size={20} color="#10b981" style={styles.messageIcon} />
-                  <Text style={styles.assistantMessageText}>{response}</Text>
+                  <Text style={styles.assistantMessageText}>{streamingResponse || response}</Text>
                 </View>
               </View>
             )}
@@ -304,7 +431,7 @@ export default function App() {
                   <View key={index} style={styles.docItem}>
                     <View style={styles.docInfo}>
                       <Text style={styles.docSource}>
-                        {doc.source.replace('_chunk_', ' (Chunk ').replace(/(\d+)$/, '$1)')}
+                        {(doc.source || 'Unknown Source').replace('_chunk_', ' (Chunk ').replace(/(\d+)$/, '$1)')}
                         {doc.chunk_index && doc.total_chunks && (
                           <Text style={styles.chunkInfo}>
                             {' '}(Chunk {doc.chunk_index}/{doc.total_chunks})
@@ -312,7 +439,7 @@ export default function App() {
                         )}
                       </Text>
                       <Text style={styles.docOriginal}>
-                        From: {doc.original_file.replace('_chunk_', ' (Chunk ').replace(/(\d+)$/, '$1)')}
+                        From: {(doc.original_file || 'Unknown File').replace('_chunk_', ' (Chunk ').replace(/(\d+)$/, '$1)')}
                       </Text>
                       {doc.token_count && (
                         <Text style={styles.tokenInfo}>
@@ -343,42 +470,42 @@ export default function App() {
                   <View style={styles.latencyStatItem}>
                     <Text style={styles.latencyStatLabel}>Audio Processing</Text>
                     <Text style={styles.latencyStatValue}>
-                      {(latencyStats.audio_processing_latency * 1000).toFixed(0)}ms
+                      {formatBackendLatency(latencyStats.audio_processing_latency)}
                     </Text>
                   </View>
                   
                   <View style={styles.latencyStatItem}>
                     <Text style={styles.latencyStatLabel}>Vector Search</Text>
                     <Text style={styles.latencyStatValue}>
-                      {(latencyStats.retrieval_latency * 1000).toFixed(0)}ms
+                      {formatBackendLatency(latencyStats.retrieval_latency)}
                     </Text>
                   </View>
                   
                   <View style={styles.latencyStatItem}>
                     <Text style={styles.latencyStatLabel}>LLM Response</Text>
                     <Text style={styles.latencyStatValue}>
-                      {(latencyStats.llm_latency * 1000).toFixed(0)}ms
+                      {formatBackendLatency(latencyStats.llm_latency)}
                     </Text>
                   </View>
                   
                   <View style={styles.latencyStatItem}>
                     <Text style={styles.latencyStatLabel}>Total Backend</Text>
                     <Text style={styles.latencyStatValue}>
-                      {(latencyStats.total_latency * 1000).toFixed(0)}ms
+                      {formatBackendLatency(latencyStats.total_latency)}
                     </Text>
                   </View>
                   
                   <View style={styles.latencyStatItem}>
                     <Text style={styles.latencyStatLabel}>Network + UI</Text>
                     <Text style={styles.latencyStatValue}>
-                      {Math.max(0, latency - (latencyStats.total_latency * 1000)).toFixed(0)}ms
+                      {formatLatency(Math.max(0, latency - (latencyStats.total_latency * 1000)))}
                     </Text>
                   </View>
                   
                   <View style={styles.latencyStatItem}>
                     <Text style={styles.latencyStatLabel}>Total End-to-End</Text>
                     <Text style={styles.latencyStatValue}>
-                      {latency}ms
+                      {formatLatency(latency)}
                     </Text>
                   </View>
                 </View>
@@ -435,14 +562,14 @@ export default function App() {
             {!latencyStats && latency > 0 && (
               <View style={styles.latencyContainer}>
                 <Ionicons name="time" size={16} color="#6b7280" />
-                <Text style={styles.latencyText}>Response time: {latency}ms</Text>
+                <Text style={styles.latencyText}>Response time: {formatLatency(latency)}</Text>
               </View>
             )}
           </View>
         )}
 
         {/* Empty State */}
-        {!transcript && !response && !recording && !isLoading && (
+        {!streamingTranscript && !transcript && !streamingResponse && !response && !recording && !isLoading && (
           <View style={styles.emptyState}>
             <Ionicons 
               name={isConnected ? "mic-outline" : "wifi-outline"} 
@@ -466,7 +593,7 @@ export default function App() {
       <View style={styles.bottomContainer}>
         <View style={styles.controlsContainer}>
           {/* Clear Button */}
-          {(transcript || response) && (
+          {(streamingTranscript || transcript || streamingResponse || response) && (
             <TouchableOpacity style={styles.clearButton} onPress={clearChat}>
               <Ionicons name="trash-outline" size={20} color="#ef4444" />
               <Text style={styles.clearButtonText}>Clear</Text>
